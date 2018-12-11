@@ -1,0 +1,118 @@
+#!/bin/sh
+
+ACTION=$1
+INTERFACE=$2
+DEVICE=$3
+GATEWAY=$4
+lan_ip=""
+auth_ip=""
+redict_url=""
+
+poll_protal()
+{
+	local inv=0.5
+	while [ true ];do
+	http_code=$(curl --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}" -o /dev/null)
+	[ "$http_code" = 302 ] || {
+		[ $inv = 0.5 ] && remove_protal
+		inv=5			
+		echo "authenticated"
+		break
+	}
+	#[ "$http_code" = 302 ] && {
+	#	[ $inv = 5 ] && join_protal
+	#	inv=0.5
+	#	echo "wait for authentication"
+	#}	
+	#sleep $inv
+	done
+}
+
+join_protal()
+{
+	auth_ip=$(curl --interface $DEVICE --dns-server $GATEWAY -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
+	#[ -z "$auth_ip" ] && {
+	#	auth_ip=$(curl --interface $DEVICE --dns-server $GATEWAYROUT -Ls -w "%{remote_ip}"  www.airport.us -o /dev/null)
+	#}
+	[ -z "$auth_ip" ] && return
+	
+	echo auth_ip:$auth_ip
+
+	lan_ip=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
+	[ -z "$lan_ip" ] && return
+
+	iptables -t nat -N GL_PROTAL
+	iptables -t nat -I PREROUTING -j GL_PROTAL
+	iptables -t nat -A GL_PROTAL -p udp -m udp --dport 53 -j DNAT --to-destination $lan_ip
+	iptables -t nat -A GL_PROTAL -p tcp -m tcp --dport 53 -j DNAT --to-destination $lan_ip
+
+	iptables  -N GL_PROTAL
+	iptables  -I FORWARD -j GL_PROTAL
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -j DROP
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p tcp --dport 80 -j ACCEPT
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p udp --dport 80 -j ACCEPT
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p tcp --dport 443 -j ACCEPT
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p udp --dport 443 -j ACCEPT
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -d $GATEWAY -j ACCEPT
+
+	uci add_list dhcp.@dnsmasq[0].address=/$redict_url/$auth_ip
+	uci add_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
+	#uci add_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY
+	uci commit dhcp
+	/etc/init.d/dnsmasq restart
+
+	ip route add ${GATEWAY}/32 dev $DEVICE
+	ip route add via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
+}
+
+remove_protal()
+{
+	auth_ip="195.228.254.149"
+	redict_url="customer.hotspotsystem.com"
+	ip route del ${GATEWAY}  dev wlan-sta scope link	
+	ip route del via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
+
+	iptables -D FORWARD -j GL_PROTAL
+	iptables -F  GL_PROTAL
+	iptables -X GL_PROTAL
+	iptables -t nat -D PREROUTING -j GL_PROTAL
+	iptables -t nat -F  GL_PROTAL
+	iptables -t nat -X GL_PROTAL
+
+	uci del_list dhcp.@dnsmasq[0].address=/$redict_url/$auth_ip
+	uci del_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
+	#uci del_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY	
+             
+    uci commit dhcp                                                         
+    /etc/init.d/dnsmasq restart	
+}
+
+
+[ "$ACTION" = "join" ] && {
+	tmp=$(curl --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
+	http_code=$(echo $tmp|awk -F ':' '{print $1}')
+	[ "$http_code" = 302 ] || exit 0
+	redict_url=$(echo $tmp|awk -F '/' '{print $3}')
+	#http_code=$(curl --interface $DEVICE --dns-servers $GATEWAY  www.airport.us -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
+	#[ "$http_code" = 302 ] || exit 0
+	echo "httpcode:$http_code"
+	echo "URL:$redict_url"
+	echo "join protal"
+	join_protal
+	poll_protal
+	exit 0
+}
+
+[ "$ACTION" = "remove" ] && {
+	remove_protal
+	exit 0
+}
+
+[ "$ACTION" = "poll" ] && {
+	poll_protal
+	exit 0
+}
+
+
+
+
