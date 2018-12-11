@@ -7,6 +7,8 @@ GATEWAY=$4
 lan_ip=""
 auth_ip=""
 redict_url=""
+wg_en="0"
+ov_en="0"
 
 poll_protal()
 {
@@ -14,17 +16,12 @@ poll_protal()
 	while [ true ];do
 	http_code=$(curl --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}" -o /dev/null)
 	[ "$http_code" = 302 ] || {
-		[ $inv = 0.5 ] && remove_protal
-		inv=5			
+		remove_protal		
 		echo "authenticated"
 		break
 	}
-	#[ "$http_code" = 302 ] && {
-	#	[ $inv = 5 ] && join_protal
-	#	inv=0.5
-	#	echo "wait for authentication"
-	#}	
-	#sleep $inv
+	#sleep 0.5
+
 	done
 }
 
@@ -57,34 +54,57 @@ join_protal()
 
 	uci add_list dhcp.@dnsmasq[0].address=/$redict_url/$auth_ip
 	uci add_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
-	#uci add_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY
+	
+	uci add_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].server=/appleiphonecell.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].server=/icloud.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].server=/itunes.apple.com/$GATEWAY
+	
 	uci commit dhcp
 	/etc/init.d/dnsmasq restart
 
-	ip route add ${GATEWAY}/32 dev $DEVICE
-	ip route add via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
+	#ip route add ${GATEWAY}/32 dev $DEVICE
+	#ip route add via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
+	wg_en=$(uci get wireguard.@proxy[0].enable)
+	[ "$wg_en" = "1" ] && {
+		ip route del 0.0.0.0/1 dev wg0 scope link
+		ip route del 128.0.0.0/1 dev wg0 scope link
+	}
 }
 
 remove_protal()
 {
 	auth_ip="195.228.254.149"
 	redict_url="customer.hotspotsystem.com"
-	ip route del ${GATEWAY}  dev wlan-sta scope link	
-	ip route del via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
-
-	iptables -D FORWARD -j GL_PROTAL
-	iptables -F  GL_PROTAL
-	iptables -X GL_PROTAL
-	iptables -t nat -D PREROUTING -j GL_PROTAL
-	iptables -t nat -F  GL_PROTAL
-	iptables -t nat -X GL_PROTAL
+	
+	wg_en=$(uci get wireguard.@proxy[0].enable)
+	[ "$wg_en" = "1" ]&& {
+		ip route add 128.0.0.0/1 dev wg0 scope link
+		ip route add 0.0.0.0/1 dev wg0 scope link		
+	}
+	#ip route del ${GATEWAY}  dev wlan-sta scope link	
+	#ip route del via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
 
 	uci del_list dhcp.@dnsmasq[0].address=/$redict_url/$auth_ip
 	uci del_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
-	#uci del_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY	
-             
+	
+	uci del_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].server=/appleiphonecell.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].server=/icloud.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].server=/itunes.apple.com/$GATEWAY	
+            
     uci commit dhcp                                                         
     /etc/init.d/dnsmasq restart	
+
+	iptables -D FORWARD -j GL_PROTAL
+	iptables -F  GL_PROTAL
+	iptables -X GL_PROTAL	
+	
+	iptables -t nat -D PREROUTING -j GL_PROTAL
+	iptables -t nat -F  GL_PROTAL
+	iptables -t nat -X GL_PROTAL
 }
 
 
