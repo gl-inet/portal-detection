@@ -27,84 +27,93 @@ poll_protal()
 
 join_protal()
 {
-	auth_ip=$(curl --interface $DEVICE --dns-server $GATEWAY -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
-	#[ -z "$auth_ip" ] && {
-	#	auth_ip=$(curl --interface $DEVICE --dns-server $GATEWAYROUT -Ls -w "%{remote_ip}"  www.airport.us -o /dev/null)
-	#}
-	[ -z "$auth_ip" ] && return
+	#auth_ip=$(curl --interface $DEVICE --dns-server $GATEWAY -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
+	#[ -z "$auth_ip" ] && return
 	
-	echo auth_ip:$auth_ip
+	#echo auth_ip:$auth_ip
 
 	lan_ip=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
 	[ -z "$lan_ip" ] && return
 
+	ipset create gl_protal_whitelist hash:net
+	ipset add gl_protal_whitelist ${GATEWAY}/32
+	
+	uci add_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].address=/.org/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].address=/.top/$GATEWAY
+
+	
+	uci add_list dhcp.@dnsmasq[0].server=/$redict_url/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].ipset=/$redict_url/gl_protal_whitelist
+	uci add_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].ipset=/apple.com/gl_protal_whitelist
+	uci add_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
+	uci add_list dhcp.@dnsmasq[0].ipset=/captive.apple.com/gl_protal_whitelist
+	
+	uci commit dhcp
+	/etc/init.d/dnsmasq restart
+	
+	iptables  -N GL_PROTAL
+	iptables  -I FORWARD -j GL_PROTAL
+	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -j DROP
+	iptables  -I GL_PROTAL -m set --match-set gl_protal_whitelist dst -j ACCEPT
+
+	
 	iptables -t nat -N GL_PROTAL
 	iptables -t nat -I PREROUTING -j GL_PROTAL
 	iptables -t nat -A GL_PROTAL -p udp -m udp --dport 53 -j DNAT --to-destination $lan_ip
 	iptables -t nat -A GL_PROTAL -p tcp -m tcp --dport 53 -j DNAT --to-destination $lan_ip
-
-	iptables  -N GL_PROTAL
-	iptables  -I FORWARD -j GL_PROTAL
-	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -j DROP
-	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p tcp --dport 80 -j ACCEPT
-	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p udp --dport 80 -j ACCEPT
-	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p tcp --dport 443 -j ACCEPT
-	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -p udp --dport 443 -j ACCEPT
-	iptables  -I GL_PROTAL -i br-lan -o $DEVICE -d $GATEWAY -j ACCEPT
-
-	uci add_list dhcp.@dnsmasq[0].address=/$redict_url/$auth_ip
-	uci add_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
 	
-	uci add_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].server=/appleiphonecell.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].server=/icloud.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].server=/itunes.apple.com/$GATEWAY
+	iptables -t mangle -N GL_PROTAL
+	iptables -t mangle -A PREROUTING -j GL_PROTAL
+	iptables -t mangle -A GL_PROTAL -m set --match-set gl_protal_whitelist dst -m conntrack --ctstate NEW  -j MARK --set-mark 0x80/0x80
+	iptables -t mangle -A GL_PROTAL -m mark  --mark 0x80/0x80 -j CONNMARK --save-mark --nfmask 0x80 --ctmask 0x80
+	iptables -t mangle -A GL_PROTAL -m mark  --mark 0x80/0x80 -j CONNMARK --restore-mark --nfmask 0x80 --ctmask 0x80
 	
-	uci commit dhcp
-	/etc/init.d/dnsmasq restart
-
-	#ip route add ${GATEWAY}/32 dev $DEVICE
-	#ip route add via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
-	wg_en=$(uci get wireguard.@proxy[0].enable)
-	[ "$wg_en" = "1" ] && {
-		ip route del 0.0.0.0/1 dev wg0 scope link
-		ip route del 128.0.0.0/1 dev wg0 scope link
-	}
+	ip route add via $GATEWAY 0.0.0.0/1 dev wlan-sta metric 10 table 50
+	ip route add via $GATEWAY 128.0.0.0/1 dev wlan-sta metric 10 table 50
+	ip rule add fwmark 0x80/0x80 table 50
+	
+	
 }
 
 remove_protal()
 {
-	auth_ip="195.228.254.149"
 	redict_url="customer.hotspotsystem.com"
-	
-	wg_en=$(uci get wireguard.@proxy[0].enable)
-	[ "$wg_en" = "1" ]&& {
-		ip route add 128.0.0.0/1 dev wg0 scope link
-		ip route add 0.0.0.0/1 dev wg0 scope link		
-	}
-	#ip route del ${GATEWAY}  dev wlan-sta scope link	
-	#ip route del via ${GATEWAY} ${auth_ip} dev $DEVICE scope global
 
-	uci del_list dhcp.@dnsmasq[0].address=/$redict_url/$auth_ip
-	uci del_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
+	ip rule del fwmark 0x80/0x80 table 50
+	ip route flush table 50
+	echo " " >/proc/net/nf_conntrack
 	
-	uci del_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].server=/appleiphonecell.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].server=/icloud.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].server=/itunes.apple.com/$GATEWAY	
-            
-    uci commit dhcp                                                         
-    /etc/init.d/dnsmasq restart	
-
-	iptables -D FORWARD -j GL_PROTAL
-	iptables -F  GL_PROTAL
-	iptables -X GL_PROTAL	
+	iptables -t mangle -D PREROUTING -j GL_PROTAL
+	iptables -t mangle -F  GL_PROTAL
+	iptables -t mangle -X GL_PROTAL	
 	
 	iptables -t nat -D PREROUTING -j GL_PROTAL
 	iptables -t nat -F  GL_PROTAL
 	iptables -t nat -X GL_PROTAL
+	
+	iptables -D FORWARD -j GL_PROTAL
+	iptables -F  GL_PROTAL
+	iptables -X GL_PROTAL	
+
+	uci del_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].address=/.org/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].address=/.top/$GATEWAY
+	
+	uci del_list dhcp.@dnsmasq[0].server=/$redict_url/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].ipset=/$redict_url/gl_protal_whitelist
+	uci del_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].ipset=/apple.com/gl_protal_whitelist
+	uci del_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
+	uci del_list dhcp.@dnsmasq[0].ipset=/captive.apple.com/gl_protal_whitelist
+            
+    uci commit dhcp                                                         
+    /etc/init.d/dnsmasq restart	
+	
+	ipset destroy gl_protal_whitelist
 }
 
 
@@ -113,8 +122,6 @@ remove_protal()
 	http_code=$(echo $tmp|awk -F ':' '{print $1}')
 	[ "$http_code" = 302 ] || exit 0
 	redict_url=$(echo $tmp|awk -F '/' '{print $3}')
-	#http_code=$(curl --interface $DEVICE --dns-servers $GATEWAY  www.airport.us -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
-	#[ "$http_code" = 302 ] || exit 0
 	echo "httpcode:$http_code"
 	echo "URL:$redict_url"
 	echo "join protal"
