@@ -8,7 +8,7 @@ lan_ip=""
 auth_ip=""
 redict_url=""
 result=0
-trap "clear_protal" INT TERM QUIT KILL
+
 [ -f /var/run/protal.lock ] && exit 0
 
 [ -z "$INTERFACE" ] && {
@@ -35,16 +35,39 @@ ipt_safe()
 	$@
 	[ ! $? = 0  ] && {
 		logger "iptables command execute failed, try again!"
-		sleep 1
+		sleep 0.5
 		$@
 	}
 	
 }
 
+check_vpn_dns()
+{
+local ov wg cf rb
+ov=$(uci get glconfig.openvpn.enable)
+wg=$( uci get wireguard.@proxy[0].enable)
+cf=$(uci get glconfig.general.cloudflare_dns)
+rb=$(uci get dhcp.@dnsmasq[0].rebind_protection)
+
+[ "$ov" != "1" -a  "$wg" != "1" -a "$cf" != "1" -a "$rb" != "1" ] && return 0
+return 1
+}
 
 probe_protal()
 {
+	local wan_status
 	logger -t protal-probe "probe"
+	check_vpn_dns
+	[ $? = 0 ] && {
+		logger -t protal-probe "not any VPN or DNS setings, just return"
+		return 0;
+	}
+	wan_status=$(cat /var/run/mwan3/iface_state/wan)
+	[ "$wan_status" = "online" ] && {
+		logger -t protal-probe "wan is online, just return"
+		result=0
+		return 0	
+	}
 	tmp=$(curl --connect-timeout 5 --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
 	[ $? = 0 ] || {
 		result=0
@@ -62,8 +85,21 @@ probe_protal()
 
 poll_protal()
 {
+	local wan_status
 	logger -t protal-probe "poll"
 	while [ true ];do
+	check_vpn_dns
+	[ $? = 0 ] && {
+		logger -t protal-poll "not any VPN or DNS setings, just return"
+		remove_protal
+		break;
+	}	
+	wan_status=$(cat /var/run/mwan3/iface_state/wan)
+	[ "$wan_status" = "online" ] && {
+		logger -t protal-poll "wan online,stop protal poll"
+		remove_protal
+		break
+	}	
 	http_code=$(curl --connect-timeout 5 --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}" -o /dev/null)
 	[ $? = 0 ] || continue
 	[ "$http_code" = 302  ] || {
@@ -72,7 +108,7 @@ poll_protal()
 		remove_protal
 		break
 	}
-	#sleep 5
+	sleep 2
 	done
 }
 
@@ -92,26 +128,34 @@ join_protal()
 	ipset create gl_protal_whitelist hash:net
 	ipset add gl_protal_whitelist ${GATEWAY}/32
 	
-	uci add_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].address=/.org/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].address=/.top/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].address=/.cn/$GATEWAY
+	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
+	echo address=/.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo address=/.net/$GATEWAY >>/etc/dnsmasq.conf
+	echo address=/.org/$GATEWAY >>/etc/dnsmasq.conf
+	echo address=/.top/$GATEWAY >>/etc/dnsmasq.conf
+	echo address=/.cn/$GATEWAY >>/etc/dnsmasq.conf
 
 	
-	uci add_list dhcp.@dnsmasq[0].server=/$redict_url/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].ipset=/$redict_url/gl_protal_whitelist
-	uci add_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].ipset=/apple.com/gl_protal_whitelist
-	uci add_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].ipset=/captive.apple.com/gl_protal_whitelist
-	uci add_list dhcp.@dnsmasq[0].server=/ssl.google-analytics.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].ipset=/ssl.google-analytics.com/gl_protal_whitelist
-	uci add_list dhcp.@dnsmasq[0].server=/captive.g.aaplimg.com/$GATEWAY
-	uci add_list dhcp.@dnsmasq[0].ipset=/captive.g.aaplimg.com/gl_protal_whitelist		
+	echo server=/$redict_url/$GATEWAY >>/etc/dnsmasq.conf
+	echo ipset=/$redict_url/gl_protal_whitelist >>/etc/dnsmasq.conf
+	echo server=/apple.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo ipset=/apple.com/gl_protal_whitelist >>/etc/dnsmasq.conf
+	echo server=/captive.apple.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo ipset=/captive.apple.com/gl_protal_whitelist >>/etc/dnsmasq.conf
+	echo server=/ssl.google-analytics.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo ipset=/ssl.google-analytics.com/gl_protal_whitelist >>/etc/dnsmasq.conf
+	echo server=/captive.g.aaplimg.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo ipset=/captive.g.aaplimg.com/gl_protal_whitelist >>/etc/dnsmasq.conf
 	
-	uci commit dhcp
+	echo rebind-domain-ok=${redict_url}/.com/.net/.org/.top/.cn  >>/etc/dnsmasq.conf
+	
 	/etc/init.d/dnsmasq restart
+	
+	while [ true ];do
+		[ ! -f /var/run/fw3.lock ] && break
+		sleep 1
+		logger -t protal-join "wait for firewall free"
+	done
 	
 	iptables  -N GL_PROTAL
 	iptables  -I FORWARD -j GL_PROTAL
@@ -141,8 +185,13 @@ remove_protal()
 	logger -t protal-remove "remove"
 	ip rule del fwmark 0x80/0x80 table 50
 	ip route flush table 50
-	echo " " >/proc/net/nf_conntrack
-	
+	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
+
+	while [ true ];do
+		[ ! -f /var/run/fw3.lock ] && break
+		sleep 1
+		logger -t protal-remove "wait for firewall free"
+	done
 	ipt_safe iptables -t mangle -D PREROUTING -j GL_PROTAL
 	ipt_safe iptables -t mangle -F  GL_PROTAL
 	ipt_safe iptables -t mangle -X GL_PROTAL	
@@ -155,27 +204,7 @@ remove_protal()
 	ipt_safe iptables -F  GL_PROTAL
 	ipt_safe iptables -X GL_PROTAL	
 
-	uci del_list dhcp.@dnsmasq[0].address=/.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].address=/.net/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].address=/.org/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].address=/.top/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].address=/.cn/$GATEWAY
-	
-	uci del_list dhcp.@dnsmasq[0].server=/apple.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].ipset=/apple.com/gl_protal_whitelist
-	uci del_list dhcp.@dnsmasq[0].server=/captive.apple.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].ipset=/captive.apple.com/gl_protal_whitelist
-	uci del_list dhcp.@dnsmasq[0].server=/ssl.google-analytics.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].ipset=/ssl.google-analytics.com/gl_protal_whitelist
-	uci del_list dhcp.@dnsmasq[0].server=/captive.g.aaplimg.com/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].ipset=/captive.g.aaplimg.com/gl_protal_whitelist
-	[ -z "$redict_url" ] && {
-		redict_url=$(uci get dhcp.@dnsmasq[0].server|awk -F '/' '{printf $2}')
-	}
-	uci del_list dhcp.@dnsmasq[0].server=/$redict_url/$GATEWAY
-	uci del_list dhcp.@dnsmasq[0].ipset=/$redict_url/gl_protal_whitelist	
-            
-    uci commit dhcp                                                         
+	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
     /etc/init.d/dnsmasq restart	
 	
 	ipset destroy gl_protal_whitelist
@@ -186,6 +215,8 @@ clear_protal() {
 	[ -f /var/run/protal.lock ] && rm /var/run/protal.lock
 	exit 0
 }
+
+trap "clear_protal" INT TERM QUIT KILL
 
 [ "$ACTION" = "join" ] && {
 	while [ true ];do
