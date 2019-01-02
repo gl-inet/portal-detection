@@ -161,7 +161,7 @@ join_portal()
 	echo server=/captive.g.aaplimg.com/$GATEWAY >>/etc/dnsmasq.conf
 	echo ipset=/captive.g.aaplimg.com/gl_portal_whitelist >>/etc/dnsmasq.conf
 	
-	echo rebind-domain-ok=${redict_url}/.com/.net/.org/.top/.cn  >>/etc/dnsmasq.conf
+	echo rebind-domain-ok=${redict_url}  >>/etc/dnsmasq.conf
 	
 	/etc/init.d/dnsmasq restart
 	
