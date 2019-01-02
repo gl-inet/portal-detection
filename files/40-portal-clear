@@ -1,0 +1,9 @@
+#!/bin/sh
+
+[ "$ACTION" = "remove" -a "$DEVICENAME" = "wlan-sta" ] && {
+	logger "portal wlan-sta remove"
+	for i in $(fuser /usr/bin/portal);do
+		logger "kill portal $i"
+		kill $i
+	done
+}

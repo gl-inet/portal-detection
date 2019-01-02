@@ -1,5 +1,5 @@
 #!/bin/sh
 [ "$ACTION" = "ifup" -a "$DEVICE" = "wlan-sta" -a "$INTERFACE" = "wwan" ] && {
-	logger "protal wlan-sta up"
-	/usr/bin/protal join &
+	logger "portal wlan-sta up"
+	/usr/bin/portal join &
 }
