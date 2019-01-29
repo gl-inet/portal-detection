@@ -4,6 +4,8 @@ ACTION=$1
 INTERFACE=$2
 DEVICE=$3
 GATEWAY=$4
+DNS1=""
+DNS2=""
 lan_ip=""
 auth_ip=""
 redict_url=""
@@ -30,6 +32,15 @@ enable="0"
 }
 
 touch /var/run/portal.lock
+
+DNS1=$(ifstatus wwan|jsonfilter -e '@["dns-server"][0]')
+DNS2=$(ifstatus wwan|jsonfilter -e '@["dns-server"][1]')
+[ -z "$DNS1" ] && {
+	DNS1="$GATEWAY"
+}
+[ -z "$DNS2" ] && {
+	DNS2="$GATEWAY"
+}
 
 ipt_safe()
 {
@@ -58,7 +69,7 @@ probe_portal()
 {
 	local wan_status
 	logger -t portal-probe "probe"
-	enable=$(uci get glconfig.general.portal 2>/dev/null)
+	enable=$(uci get glconfig.repeater.portal 2>/dev/null)
 	[ ! "$enable" = "1" ] && {
 		logger -t portal-probe "portal monitor not enable"
 		result=0
@@ -76,7 +87,7 @@ probe_portal()
 		result=0
 		return 0	
 	}
-	tmp=$(curl --connect-timeout 5 --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
+	tmp=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  captive.apple.com -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
 	[ $? = 0 ] || {
 		result=0
 		return 0	
@@ -96,7 +107,7 @@ poll_portal()
 	local wan_status
 	logger -t portal-probe "poll"
 	while [ true ];do
-	enable=$(uci get glconfig.general.portal 2>/dev/null)
+	enable=$(uci get glconfig.repeater.portal 2>/dev/null)
 	[ ! "$enable" = "1" ] && {
 		logger -t portal-poll "portal monitor not enable"
 		remove_portal
@@ -114,7 +125,7 @@ poll_portal()
 		remove_portal
 		break
 	}	
-	http_code=$(curl --connect-timeout 5 --interface $DEVICE --dns-servers $GATEWAY  captive.apple.com -s -w "%{http_code}" -o /dev/null)
+	http_code=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  captive.apple.com -s -w "%{http_code}" -o /dev/null)
 	[ $? = 0 ] || continue
 	[ "$http_code" = 302  ] || {
 		logger -t portal-poll "authenticated"
@@ -127,9 +138,11 @@ poll_portal()
 }
 
 join_portal()
-{
-	#auth_ip=$(curl --interface $DEVICE --dns-server $GATEWAY -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
-	#[ -z "$auth_ip" ] && return
+{	
+	local rebind_ip="52.41.190.83"
+
+	auth_ip=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
+	[ -z "$auth_ip" ] && return
 	
 	#echo auth_ip:$auth_ip
 
@@ -141,27 +154,36 @@ join_portal()
 
 	ipset create gl_portal_whitelist hash:net
 	ipset add gl_portal_whitelist ${GATEWAY}/32
+	ipset add gl_portal_whitelist ${rebind_ip}/32
+	ipset add gl_portal_whitelist ${auth_ip}/32
+	ipset add gl_portal_whitelist ${lan_ip}/32
+	ipset add gl_portal_whitelist ${DNS1}/32
+	ipset add gl_portal_whitelist ${DNS2}/32
 	
 	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
-	echo address=/.com/$GATEWAY >>/etc/dnsmasq.conf
-	echo address=/.net/$GATEWAY >>/etc/dnsmasq.conf
-	echo address=/.org/$GATEWAY >>/etc/dnsmasq.conf
-	echo address=/.top/$GATEWAY >>/etc/dnsmasq.conf
-	echo address=/.cn/$GATEWAY >>/etc/dnsmasq.conf
+	#echo address=/${redict_url}/${auth_ip} >>/etc/dnsmasq.conf
+	echo address=/.com/${rebind_ip} >>/etc/dnsmasq.conf
+	echo address=/.net/${rebind_ip} >>/etc/dnsmasq.conf
+	echo address=/.org/${rebind_ip} >>/etc/dnsmasq.conf
+	echo address=/.top/${rebind_ip} >>/etc/dnsmasq.conf
+	echo address=/.cn/${rebind_ip} >>/etc/dnsmasq.conf
 
 	
-	echo server=/$redict_url/$GATEWAY >>/etc/dnsmasq.conf
+	echo server=/$redict_url/$DNS1 >>/etc/dnsmasq.conf
 	echo ipset=/$redict_url/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/apple.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo server=/apple.com/$DNS1 >>/etc/dnsmasq.conf
 	echo ipset=/apple.com/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/captive.apple.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo server=/captive.apple.com/$DNS1 >>/etc/dnsmasq.conf
 	echo ipset=/captive.apple.com/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/ssl.google-analytics.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo server=/ssl.google-analytics.com/$DNS1 >>/etc/dnsmasq.conf
 	echo ipset=/ssl.google-analytics.com/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/captive.g.aaplimg.com/$GATEWAY >>/etc/dnsmasq.conf
+	echo server=/captive.g.aaplimg.com/$DNS1 >>/etc/dnsmasq.conf
 	echo ipset=/captive.g.aaplimg.com/gl_portal_whitelist >>/etc/dnsmasq.conf
 	
 	echo rebind-domain-ok=${redict_url}  >>/etc/dnsmasq.conf
+	
+	#Read the Linux connection track mark associated with incoming DNS queries and set the same mark value on upstream traffic used to answer those queries.
+	echo conntrack  >>/etc/dnsmasq.conf	
 	
 	/etc/init.d/dnsmasq restart
 	
