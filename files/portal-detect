@@ -1,4 +1,9 @@
 #!/bin/sh
+# Copyright (C) 2019 GL.iNet
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
 
 ACTION=$1
 INTERFACE=$2
@@ -12,7 +17,7 @@ redict_url=""
 result=0
 enable="0"
 
-[ -f /var/run/portal.lock ] && exit 0
+[ -f /var/run/portal-detect.lock ] && exit 0
 
 [ -z "$INTERFACE" ] && {
 	INTERFACE="wwan"
@@ -31,7 +36,7 @@ enable="0"
 	exit 0
 }
 
-touch /var/run/portal.lock
+touch /var/run/portal-detect.lock
 
 DNS1=$(ifstatus wwan|jsonfilter -e '@["dns-server"][0]')
 DNS2=$(ifstatus wwan|jsonfilter -e '@["dns-server"][1]')
@@ -55,14 +60,14 @@ ipt_safe()
 
 check_vpn_dns()
 {
-local ov wg cf rb
-ov=$(uci get glconfig.openvpn.enable)
-wg=$( uci get wireguard.@proxy[0].enable)
-cf=$(uci get glconfig.general.cloudflare_dns)
-rb=$(uci get dhcp.@dnsmasq[0].rebind_protection)
+	local ov wg cf rb
+	ov=$(uci get glconfig.openvpn.enable)
+	wg=$( uci get wireguard.@proxy[0].enable)
+	cf=$(uci get glconfig.general.cloudflare_dns)
+	rb=$(uci get dhcp.@dnsmasq[0].rebind_protection)
 
-[ "$ov" != "1" -a  "$wg" != "1" -a "$cf" != "1" -a "$rb" != "1" ] && return 0
-return 1
+	[ "$ov" != "1" -a  "$wg" != "1" -a "$cf" != "1" -a "$rb" != "1" ] && return 0
+	return 1
 }
 
 probe_portal()
@@ -160,30 +165,30 @@ join_portal()
 	ipset add gl_portal_whitelist ${DNS1}/32
 	ipset add gl_portal_whitelist ${DNS2}/32
 	
-	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
-	#echo address=/${redict_url}/${auth_ip} >>/etc/dnsmasq.conf
-	echo address=/.com/${rebind_ip} >>/etc/dnsmasq.conf
-	echo address=/.net/${rebind_ip} >>/etc/dnsmasq.conf
-	echo address=/.org/${rebind_ip} >>/etc/dnsmasq.conf
-	echo address=/.top/${rebind_ip} >>/etc/dnsmasq.conf
-	echo address=/.cn/${rebind_ip} >>/etc/dnsmasq.conf
+	echo "#temporary config" > /tmp/dnsmasq.d/portal-detect.conf
+	#echo address=/${redict_url}/${auth_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.com/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.net/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.org/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.top/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.cn/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 
 	
-	echo server=/$redict_url/$DNS1 >>/etc/dnsmasq.conf
-	echo ipset=/$redict_url/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/apple.com/$DNS1 >>/etc/dnsmasq.conf
-	echo ipset=/apple.com/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/captive.apple.com/$DNS1 >>/etc/dnsmasq.conf
-	echo ipset=/captive.apple.com/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/ssl.google-analytics.com/$DNS1 >>/etc/dnsmasq.conf
-	echo ipset=/ssl.google-analytics.com/gl_portal_whitelist >>/etc/dnsmasq.conf
-	echo server=/captive.g.aaplimg.com/$DNS1 >>/etc/dnsmasq.conf
-	echo ipset=/captive.g.aaplimg.com/gl_portal_whitelist >>/etc/dnsmasq.conf
+	echo server=/$redict_url/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/$redict_url/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/apple.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/apple.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/captive.apple.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/captive.apple.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/ssl.google-analytics.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/ssl.google-analytics.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/captive.g.aaplimg.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/captive.g.aaplimg.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	
-	echo rebind-domain-ok=${redict_url}  >>/etc/dnsmasq.conf
+	echo rebind-domain-ok=${redict_url}  >>/tmp/dnsmasq.d/portal-detect.conf
 	
 	#Read the Linux connection track mark associated with incoming DNS queries and set the same mark value on upstream traffic used to answer those queries.
-	echo conntrack  >>/etc/dnsmasq.conf	
+	echo conntrack  >>/tmp/dnsmasq.d/portal-detect.conf	
 	
 	/etc/init.d/dnsmasq restart
 	
@@ -193,21 +198,21 @@ join_portal()
 		logger -t portal-join "wait for firewall free"
 	done
 	
-	iptables  -N GL_PROTAL
-	iptables  -I FORWARD -j GL_PROTAL
-	iptables  -I GL_PROTAL -m set --match-set gl_portal_whitelist dst -j ACCEPT
+	iptables  -N GL_PORTAL_DETECT
+	iptables  -I FORWARD -j GL_PORTAL_DETECT
+	iptables  -I GL_PORTAL_DETECT -m set --match-set gl_portal_whitelist dst -j ACCEPT
 
 	
-	iptables -t nat -N GL_PROTAL
-	iptables -t nat -I PREROUTING -j GL_PROTAL
-	iptables -t nat -A GL_PROTAL -p udp -m udp --dport 53 -j DNAT --to-destination $lan_ip
-	iptables -t nat -A GL_PROTAL -p tcp -m tcp --dport 53 -j DNAT --to-destination $lan_ip
+	iptables -t nat -N GL_PORTAL_DETECT
+	iptables -t nat -I PREROUTING -j GL_PORTAL_DETECT
+	iptables -t nat -A GL_PORTAL_DETECT -p udp -m udp --dport 53 -j DNAT --to-destination $lan_ip
+	iptables -t nat -A GL_PORTAL_DETECT -p tcp -m tcp --dport 53 -j DNAT --to-destination $lan_ip
 	
-	iptables -t mangle -N GL_PROTAL
-	iptables -t mangle -A PREROUTING -j GL_PROTAL
-	iptables -t mangle -A GL_PROTAL -m set --match-set gl_portal_whitelist dst -m conntrack --ctstate NEW  -j MARK --set-mark 0x80/0x80
-	iptables -t mangle -A GL_PROTAL -m mark  --mark 0x80/0x80 -j CONNMARK --save-mark --nfmask 0x80 --ctmask 0x80
-	iptables -t mangle -A GL_PROTAL -m mark  --mark 0x80/0x80 -j CONNMARK --restore-mark --nfmask 0x80 --ctmask 0x80
+	iptables -t mangle -N GL_PORTAL_DETECT
+	iptables -t mangle -A PREROUTING -j GL_PORTAL_DETECT
+	iptables -t mangle -A GL_PORTAL_DETECT -m set --match-set gl_portal_whitelist dst -m conntrack --ctstate NEW  -j MARK --set-mark 0x80/0x80
+	iptables -t mangle -A GL_PORTAL_DETECT -m mark  --mark 0x80/0x80 -j CONNMARK --save-mark --nfmask 0x80 --ctmask 0x80
+	iptables -t mangle -A GL_PORTAL_DETECT -m mark  --mark 0x80/0x80 -j CONNMARK --restore-mark --nfmask 0x80 --ctmask 0x80
 	
 	ip route add via $GATEWAY 0.0.0.0/1 dev wlan-sta  table 50
 	ip route add via $GATEWAY 128.0.0.0/1 dev wlan-sta  table 50
@@ -221,34 +226,33 @@ remove_portal()
 	logger -t portal-remove "remove"
 	ip rule del fwmark 0x80/0x80 table 50
 	ip route flush table 50
-	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
 
 	while [ true ];do
 		[ ! -f /var/run/fw3.lock ] && break
 		sleep 1
 		logger -t portal-remove "wait for firewall free"
 	done
-	ipt_safe iptables -t mangle -D PREROUTING -j GL_PROTAL
-	ipt_safe iptables -t mangle -F  GL_PROTAL
-	ipt_safe iptables -t mangle -X GL_PROTAL	
+	ipt_safe iptables -t mangle -D PREROUTING -j GL_PORTAL_DETECT
+	ipt_safe iptables -t mangle -F  GL_PORTAL_DETECT
+	ipt_safe iptables -t mangle -X GL_PORTAL_DETECT	
 	
-	ipt_safe iptables -t nat -D PREROUTING -j GL_PROTAL
-	ipt_safe iptables -t nat -F  GL_PROTAL
-	ipt_safe iptables -t nat -X GL_PROTAL
+	ipt_safe iptables -t nat -D PREROUTING -j GL_PORTAL_DETECT
+	ipt_safe iptables -t nat -F  GL_PORTAL_DETECT
+	ipt_safe iptables -t nat -X GL_PORTAL_DETECT
 	
-	ipt_safe iptables -D FORWARD -j GL_PROTAL
-	ipt_safe iptables -F  GL_PROTAL
-	ipt_safe iptables -X GL_PROTAL	
+	ipt_safe iptables -D FORWARD -j GL_PORTAL_DETECT
+	ipt_safe iptables -F  GL_PORTAL_DETECT
+	ipt_safe iptables -X GL_PORTAL_DETECT	
 
-	cp /rom/etc/dnsmasq.conf /etc/dnsmasq.conf
-    /etc/init.d/dnsmasq restart	
+	[ -f /tmp/dnsmasq.d/portal-detect.conf ] && rm  /tmp/dnsmasq.d/portal-detect.conf
+ 	/etc/init.d/dnsmasq restart	
 	
 	ipset destroy gl_portal_whitelist
 }
 
 clear_portal() {
 	remove_portal
-	[ -f /var/run/portal.lock ] && rm /var/run/portal.lock
+	[ -f /var/run/portal-detect.lock ] && rm /var/run/portal-detect.lock
 	exit 0
 }
 
@@ -277,7 +281,7 @@ trap "clear_portal" INT TERM QUIT KILL
 	probe_portal
 }
 
-[ -f /var/run/portal.lock ] && rm /var/run/portal.lock
+[ -f /var/run/portal-detect.lock ] && rm /var/run/portal-detect.lock
 exit $result
 
 

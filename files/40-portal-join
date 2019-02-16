@@ -1,5 +1,10 @@
 #!/bin/sh
+# Copyright (C) 2019 GL.iNet
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
 [ "$ACTION" = "ifup" -a "$DEVICE" = "wlan-sta" -a "$INTERFACE" = "wwan" ] && {
-	logger "portal wlan-sta up"
-	/usr/bin/portal join &
+	logger -t  portal-detect "wlan-sta up"
+	/usr/bin/portal-detect join &
 }
