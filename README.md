@@ -3,8 +3,9 @@
 When GL travel router uses VPN,DNS Cloudflare and DNS Rebinding Attack Protection, It may not be able to access the portal authentication page.This program is used to handle such cases,and it automatically detects portal AP, allowing authentication pages to pass firewall and DNS authentication without authentication,after the authentication is complete, the normal policy is restored
 ## Testing firmware URL
 
-[AR750S](http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/) http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/
-[MIFI](http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/)   http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/mifi/testing/
+[GL.iNet AR750S](http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/gl-ar750s-portal-detect.tar) http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/gl-ar750s-portal-detect.tar
+
+[GL.iNet MIFI](http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/mifi/testing/gl-mifi-portal-detect.bin)   http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/mifi/testing/gl-mifi-portal-detect.bin
 
 ## Enable
 
@@ -70,4 +71,4 @@ opkg install gl-portal-detect
 ```
 ## Notic
 
-** If that doesn't work, you might want to recompile curl and install it because it needs to support libares **
+If that doesn't work, you might want to recompile curl and install it because it needs to support libares
