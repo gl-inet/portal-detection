@@ -58,6 +58,7 @@ ipt_safe()
 	
 }
 
+#Check the VPN and cloudflare and rebind protection
 check_vpn_dns()
 {
 	local ov wg cf rb
@@ -70,6 +71,7 @@ check_vpn_dns()
 	return 1
 }
 
+#Probe the portal AP
 probe_portal()
 {
 	local wan_status
@@ -107,6 +109,7 @@ probe_portal()
 	result=2
 }
 
+#Cycle check for authentication status
 poll_portal()
 {
 	local wan_status
@@ -146,10 +149,9 @@ join_portal()
 {	
 	local rebind_ip="52.41.190.83"
 
+	#Use curl's DNS asynchronous resolution feature,which requires curl to support libcares
 	auth_ip=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
 	[ -z "$auth_ip" ] && return
-	
-	#echo auth_ip:$auth_ip
 
 	lan_ip=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
 	[ -z "$lan_ip" ] && {
@@ -158,6 +160,7 @@ join_portal()
 	}
 
 	ipset create gl_portal_whitelist hash:net
+	#Add the required IP for authentication to the white list
 	ipset add gl_portal_whitelist ${GATEWAY}/32
 	ipset add gl_portal_whitelist ${rebind_ip}/32
 	ipset add gl_portal_whitelist ${auth_ip}/32
@@ -166,14 +169,14 @@ join_portal()
 	ipset add gl_portal_whitelist ${DNS2}/32
 	
 	echo "#temporary config" > /tmp/dnsmasq.d/portal-detect.conf
-	#echo address=/${redict_url}/${auth_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	#To prevent data leaks, we need to hijack the URL locally
 	echo address=/.com/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 	echo address=/.net/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 	echo address=/.org/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 	echo address=/.top/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 	echo address=/.cn/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 
-	
+	#Add commonly used portal explorer urls to the white list
 	echo server=/$redict_url/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
 	echo ipset=/$redict_url/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	echo server=/apple.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
@@ -185,6 +188,7 @@ join_portal()
 	echo server=/captive.g.aaplimg.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
 	echo ipset=/captive.g.aaplimg.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	
+	#Prevent authentication pages from being rejected, which can happen on some lans
 	echo rebind-domain-ok=${redict_url}  >>/tmp/dnsmasq.d/portal-detect.conf
 	
 	#Read the Linux connection track mark associated with incoming DNS queries and set the same mark value on upstream traffic used to answer those queries.
@@ -198,29 +202,33 @@ join_portal()
 		logger -t portal-join "wait for firewall free"
 	done
 	
+	#Allows forwarding data  that the IP address in the whitelist
 	iptables  -N GL_PORTAL_DETECT
 	iptables  -I FORWARD -j GL_PORTAL_DETECT
 	iptables  -I GL_PORTAL_DETECT -m set --match-set gl_portal_whitelist dst -j ACCEPT
 
-	
+	#Force local DNS resolution
 	iptables -t nat -N GL_PORTAL_DETECT
 	iptables -t nat -I PREROUTING -j GL_PORTAL_DETECT
 	iptables -t nat -A GL_PORTAL_DETECT -p udp -m udp --dport 53 -j DNAT --to-destination $lan_ip
 	iptables -t nat -A GL_PORTAL_DETECT -p tcp -m tcp --dport 53 -j DNAT --to-destination $lan_ip
 	
+	#Mark the IP address in the whitelist
 	iptables -t mangle -N GL_PORTAL_DETECT
 	iptables -t mangle -A PREROUTING -j GL_PORTAL_DETECT
 	iptables -t mangle -A GL_PORTAL_DETECT -m set --match-set gl_portal_whitelist dst -m conntrack --ctstate NEW  -j MARK --set-mark 0x80/0x80
 	iptables -t mangle -A GL_PORTAL_DETECT -m mark  --mark 0x80/0x80 -j CONNMARK --save-mark --nfmask 0x80 --ctmask 0x80
 	iptables -t mangle -A GL_PORTAL_DETECT -m mark  --mark 0x80/0x80 -j CONNMARK --restore-mark --nfmask 0x80 --ctmask 0x80
 	
-	ip route add via $GATEWAY 0.0.0.0/1 dev wlan-sta  table 50
-	ip route add via $GATEWAY 128.0.0.0/1 dev wlan-sta  table 50
+	#Let the IP address in the whitelist go to station device
+	ip route add via $GATEWAY 0.0.0.0/1 dev ${DEVICE}  table 50
+	ip route add via $GATEWAY 128.0.0.0/1 dev ${DEVICE}  table 50
 	ip rule add fwmark 0x80/0x80 table 50
 	
 	
 }
 
+#Remove the rules
 remove_portal()
 {
 	logger -t portal-remove "remove"
