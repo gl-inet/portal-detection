@@ -1,31 +1,49 @@
-# Portal AP detect program
+# WiFi Portal detection program
 
-When GL travel router uses VPN,DNS Cloudflare and DNS Rebinding Attack Protection, It may not be able to access the portal authentication page.This program is used to handle such cases,and it automatically detects portal AP, allowing authentication pages to pass firewall and DNS authentication without authentication,after the authentication is complete, the normal policy is restored
+## Background
+
+When you connect to a WiFi network e.g. hotels or in public places, there will generally be a portal page asking you for authorization information. If you don't get authorized in the portal page, you will not be able to use the Internet.
+
+When you use a WiFi router to connect to such networks, there are more things to deal with in order to let the portal page pop up correctly. You need to:
+
+* Disable all VPN connections in the router.
+* Disable DNS rebind protection. This is generally true but not for all portal.
+* Disable DNS encryption. In GL.iNet routers there are CloudFlare DNS. 
+
+But if you use the router to protect data privacies, when you do the above, your data will be leaked. 
+
+This program is used to solve this problem by manipulating the firewall without disabling your VPN and DNS protection manually while not leaking your data. 
+
+## How it works
+
+The program tries to detect if there is any WiFi portal page. If there is, it will allow the portal page to pass firewall and DNS encryption so that it will pop up in your client device connected to the router. After you authorize via the portal the firewall policy will be restored.
+
 ## Testing firmware URL
 
 [GL.iNet AR750S](http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/gl-ar750s-portal-detect.tar) http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/ar750s/testing/gl-ar750s-portal-detect.tar
 
 [GL.iNet MIFI](http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/mifi/testing/gl-mifi-portal-detect.bin)   http://download.gl-inet.com.s3-website.us-east-2.amazonaws.com/firmware/mifi/testing/gl-mifi-portal-detect.bin
 
-## Enable
+
+## How to use 
+
+You need to have a file `/etc/config/glconfig` to use this program
 
 ```
 uci set glconfig.repeater.portal=1
 uci commit glconfig
 ```
-If you are testing firmware,  you can do this directly in the repeater interface of the UI.
+If you are GL.iNet testing firmware, you can do this directly in the repeater interface of the UI.
 
-## Source code URL
+## Pre-requisite 
 
-[github](https://github.com/luochongjun/portal-detect) https://github.com/luochongjun/portal-detect
-
-### Depends
+This program requires the following three pakages.
 
 ```
 libcares libcurl dnsmasq-full
 ```
 
-## Configuration
+### How to compile 
 
 First, we need curl to use libcares for asynchronous DNS resolution.[patch](https://github.com/gl-inet/openwrt/commit/2e032d245a642a3bdaa88d830edb063204be979f)
 ```
@@ -51,6 +69,7 @@ index db72640..ba857b8 100644
         --enable-static \
         --disable-manual \
 ```
+
 Then,select  packages
 ```
 -*- libcares.. Library for asyncronous DNS Requests (including name resolves)
@@ -59,7 +78,7 @@ Then,select  packages
 <*> gl-portal-detect................. Repeater automatically detect portal AP
 ```
 
-## Compile
+Then compile the package
 
 ```
 make  ./package/portal-detect/compile
@@ -69,6 +88,7 @@ make  ./package/portal-detect/compile
 ```
 opkg install gl-portal-detect
 ```
-## Notic
+
+## Note
 
 If that doesn't work, you might want to recompile curl and install it because it needs to support libares
