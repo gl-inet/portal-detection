@@ -1,8 +1,8 @@
-# WiFi Portal detection program
+# WiFi Captive Portal detection program
 
 ## Background
 
-When you connect to a WiFi network e.g. hotels or in public places, there will generally be a portal page asking you for authorization information. If you don't get authorized in the portal page, you will not be able to use the Internet.
+When you connect to a WiFi network e.g. hotels or in public places, there will generally be a Captive portal page asking you for authorization information. If you don't get authorized in the portal page, you will not be able to use the Internet.
 
 When you use a WiFi router to connect to such networks, there are more things to deal with in order to let the portal page pop up correctly. You need to:
 
