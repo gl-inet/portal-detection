@@ -11,11 +11,15 @@ DEVICE=$3
 GATEWAY=$4
 DNS1=""
 DNS2=""
-lan_ip=""
-auth_ip=""
-redict_url=""
-result=0
-enable="0"
+
+LAN_IP=""
+AUTH_IP=""
+REDICT_URL=""
+RESULT=0
+ENABLE="0"
+
+#captive.apple.com
+PROBE_IP="17.253.85.204"
 
 [ -f /var/run/portal-detect.lock ] && exit 0
 
@@ -62,12 +66,14 @@ ipt_safe()
 check_vpn_dns()
 {
 	local ov wg cf rb ss
-	ov=$(uci get glconfig.openvpn.enable)
-	wg=$( uci get wireguard.@proxy[0].enable)
+	ov=$(uci get glconfig.openvpn.ENABLE)
+	wg=$( uci get wireguard.@proxy[0].ENABLE)
 	cf=$(uci get glconfig.general.cloudflare_dns)
 	rb=$(uci get dhcp.@dnsmasq[0].rebind_protection)
 	ss=$(pidof ss-redir)
-
+	[ ! "$ss" = "" ] && {
+		ipset add ss_spec_dst_bp ${PROBE_IP} 2>/dev/null
+	}
 	[ "$ov" != "1" -a  "$wg" != "1" -a "$cf" != "1" -a "$rb" != "1" -a "$ss" = "" ] && return 0
 	return 1
 }
@@ -77,37 +83,37 @@ probe_portal()
 {
 	local wan_status
 	logger -t portal-probe "probe"
-	enable=$(uci get glconfig.repeater.portal 2>/dev/null)
-	[ ! "$enable" = "1" ] && {
-		logger -t portal-probe "portal monitor not enable"
-		result=0
+	ENABLE=$(uci get glconfig.repeater.portal 2>/dev/null)
+	[ ! "$ENABLE" = "1" ] && {
+		logger -t portal-probe "portal monitor not ENABLE"
+		RESULT=0
 		return 0;	
 	}
 	check_vpn_dns
 	[ $? = 0 ] && {
 		logger -t portal-probe "not any VPN or DNS setings, just return"
-		result=0
+		RESULT=0
 		return 0;
 	}
 	wan_status=$(cat /var/run/mwan3/iface_state/wan)
 	[ "$wan_status" = "online" ] && {
 		logger -t portal-probe "wan is online, just return"
-		result=0
+		RESULT=0
 		return 0	
 	}
-	tmp=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  captive.apple.com -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
+	tmp=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
 	[ $? = 0 ] || {
-		result=0
+		RESULT=0
 		return 0	
 	}
 	http_code=$(echo $tmp|awk -F ':' '{print $1}')
 	[ "$http_code" = 302 ] || {
-		result=0
+		RESULT=0
 		return 0
 	}
-	redict_url=$(echo $tmp|awk -F '/' '{print $3}')
-	logger -t portal-probe "httpcode:$http_code URL:$redict_url"
-	result=2
+	REDICT_URL=$(echo $tmp|awk -F '/' '{print $3}')
+	logger -t portal-probe "httpcode:$http_code URL:$REDICT_URL"
+	RESULT=2
 }
 
 #Cycle check for authentication status
@@ -116,9 +122,9 @@ poll_portal()
 	local wan_status
 	logger -t portal-probe "poll"
 	while [ true ];do
-	enable=$(uci get glconfig.repeater.portal 2>/dev/null)
-	[ ! "$enable" = "1" ] && {
-		logger -t portal-poll "portal monitor not enable"
+	ENABLE=$(uci get glconfig.repeater.portal 2>/dev/null)
+	[ ! "$ENABLE" = "1" ] && {
+		logger -t portal-poll "portal monitor not ENABLE"
 		remove_portal
 		break;
 	}
@@ -134,7 +140,7 @@ poll_portal()
 		remove_portal
 		break
 	}	
-	http_code=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  captive.apple.com -s -w "%{http_code}" -o /dev/null)
+	http_code=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}" -o /dev/null)
 	[ $? = 0 ] || continue
 	[ "$http_code" = 302  ] || {
 		logger -t portal-poll "authenticated"
@@ -151,11 +157,11 @@ join_portal()
 	local rebind_ip="52.41.190.83"
 
 	#Use curl's DNS asynchronous resolution feature,which requires curl to support libcares
-	auth_ip=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  captive.apple.com -o /dev/null)
-	[ -z "$auth_ip" ] && return
+	AUTH_IP=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  ${PROBE_IP} -o /dev/null)
+	[ -z "$AUTH_IP" ] && return
 
-	lan_ip=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
-	[ -z "$lan_ip" ] && {
+	LAN_IP=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
+	[ -z "$LAN_IP" ] && {
 		logger -t portal-join "lan ip is null"
 		return
 	}
@@ -164,8 +170,8 @@ join_portal()
 	#Add the required IP for authentication to the white list
 	ipset add gl_portal_whitelist ${GATEWAY}/32
 	ipset add gl_portal_whitelist ${rebind_ip}/32
-	ipset add gl_portal_whitelist ${auth_ip}/32
-	ipset add gl_portal_whitelist ${lan_ip}/32
+	ipset add gl_portal_whitelist ${AUTH_IP}/32
+	ipset add gl_portal_whitelist ${LAN_IP}/32
 	ipset add gl_portal_whitelist ${DNS1}/32
 	ipset add gl_portal_whitelist ${DNS2}/32
 	
@@ -178,19 +184,19 @@ join_portal()
 	echo address=/.cn/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
 
 	#Add commonly used portal explorer urls to the white list
-	echo server=/$redict_url/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
-	echo ipset=/$redict_url/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/$REDICT_URL/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/$REDICT_URL/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	echo server=/apple.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
 	echo ipset=/apple.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
-	echo server=/captive.apple.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
-	echo ipset=/captive.apple.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/${PROBE_IP}/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/${PROBE_IP}/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	echo server=/ssl.google-analytics.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
 	echo ipset=/ssl.google-analytics.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	echo server=/captive.g.aaplimg.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
 	echo ipset=/captive.g.aaplimg.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	
 	#Prevent authentication pages from being rejected, which can happen on some lans
-	echo rebind-domain-ok=${redict_url}  >>/tmp/dnsmasq.d/portal-detect.conf
+	echo rebind-domain-ok=${REDICT_URL}  >>/tmp/dnsmasq.d/portal-detect.conf
 	
 	#Read the Linux connection track mark associated with incoming DNS queries and set the same mark value on upstream traffic used to answer those queries.
 	echo conntrack  >>/tmp/dnsmasq.d/portal-detect.conf	
@@ -211,8 +217,8 @@ join_portal()
 	#Force local DNS resolution
 	iptables -t nat -N GL_PORTAL_DETECT
 	iptables -t nat -I PREROUTING -j GL_PORTAL_DETECT
-	iptables -t nat -A GL_PORTAL_DETECT -p udp -m udp --dport 53 -j DNAT --to-destination $lan_ip
-	iptables -t nat -A GL_PORTAL_DETECT -p tcp -m tcp --dport 53 -j DNAT --to-destination $lan_ip
+	iptables -t nat -A GL_PORTAL_DETECT -p udp -m udp --dport 53 -j DNAT --to-destination $LAN_IP
+	iptables -t nat -A GL_PORTAL_DETECT -p tcp -m tcp --dport 53 -j DNAT --to-destination $LAN_IP
 	
 	#The IP in the whitelist does not through SS
 	iptables -t nat -C SS_SPEC_LAN_DG -m mark --mark 0x80/0x80 -j RETURN
@@ -261,7 +267,7 @@ remove_portal()
 	ipt_safe iptables -X GL_PORTAL_DETECT	
 
 	[ -f /tmp/dnsmasq.d/portal-detect.conf ] && rm  /tmp/dnsmasq.d/portal-detect.conf
- 	/etc/init.d/dnsmasq restart	
+ 	/etc/init.d/dnsmasq restart
 	
 	ipset destroy gl_portal_whitelist
 }
@@ -277,7 +283,7 @@ trap "clear_portal" INT TERM QUIT KILL
 [ "$ACTION" = "join" ] && {
 	while [ true ];do
 		probe_portal
-		[ $result = 2 ] && {
+		[ $RESULT = 2 ] && {
 			join_portal
 			poll_portal
 		}
@@ -298,7 +304,7 @@ trap "clear_portal" INT TERM QUIT KILL
 }
 
 [ -f /var/run/portal-detect.lock ] && rm /var/run/portal-detect.lock
-exit $result
+exit $RESULT
 
 
 
