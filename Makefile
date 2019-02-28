@@ -1,14 +1,14 @@
 #
 # Copyright (C) 2019 GL.iNet
 #
-# This is free software, licensed under the GNU General Public License v2.
+# This is free software, licensed under the GNU General Public License v3.
 # See /LICENSE for more information.
 #
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gl-portal-detect
-PKG_VERSION:=3.0.9
+PKG_VERSION:=3.0.10
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -30,6 +30,14 @@ define Package/gl-portal-detect/install
 	$(CP) ./files/40-portal-join $(1)/etc/hotplug.d/iface
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
 	$(CP) ./files/40-portal-clear $(1)/etc/hotplug.d/net
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(CP) ./files/init.d/* $(1)/etc/init.d
+	$(INSTALL_DIR) $(1)/etc/config
+	$(CP) ./files/config/* $(1)/etc/config
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller/admin/
+	$(CP) ./files/luci/control/* $(1)/usr/lib/lua/luci/controller/admin/
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/admin_network/
+	$(CP) ./files/luci/cbi/* $(1)/usr/lib/lua/luci/model/cbi/admin_network/
 endef
 
 $(eval $(call BuildPackage,gl-portal-detect))

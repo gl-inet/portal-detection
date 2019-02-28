@@ -1,0 +1,9 @@
+
+config service 'global'
+	option ifname 'wlan-sta'
+	option testpoint '17.253.85.204'
+	option enable '0'
+	option timeout '5'
+	option debug '1'
+	option interval '10'
+

@@ -1,10 +1,26 @@
 #!/bin/sh
 # Copyright (C) 2019 GL.iNet
 #
-# This is free software, licensed under the GNU General Public License v2.
+# This is free software, licensed under the GNU General Public License v3.
 # See /LICENSE for more information.
 #
-[ "$ACTION" = "ifup" -a "$DEVICE" = "wlan-sta" -a "$INTERFACE" = "wwan" ] && {
-	logger -t  portal-detect "wlan-sta up"
-	/usr/bin/portal-detect join &
+SERVICE_EN=""
+SERVICE_IF=""
+
+init_var()
+{
+	local enable ifname
+	config_get ifname  global ifname
+	config_get enable  global enable
+	SERVICE_EN=${enable:-"0" "$enable"}
+	SERVICE_IF=${ifname}
+}
+
+config_load portal-detect
+config_foreach init_var
+
+[ "$SERVICE_EN" = "0" -o "$SERVICE_IF" = "" ] && exit 0
+
+[ "$ACTION" = "ifup" -a  "$DEVICE" = "$SERVICE_IF" ] && {
+	/usr/bin/portal-detect join $DEVICE &
 }

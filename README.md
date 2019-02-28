@@ -27,13 +27,14 @@ The program tries to detect if there is any WiFi portal page. If there is, it wi
 
 ## How to use 
 
-You need to have a file `/etc/config/glconfig` to use this program
+You can enable the service by executing the following command from the command line
 
 ```
-uci set glconfig.repeater.portal=1
-uci commit glconfig
+uci set portal-detect.global.enable='1'
+uci commit portal-detect
+/etc/init.d/portal-detect restart
 ```
-If you are GL.iNet testing firmware, you can do this directly in the repeater interface of the UI.
+You can also enable it in the luci page.Its location is in admin-->network-->portal-detect.
 
 ## Pre-requisite 
 

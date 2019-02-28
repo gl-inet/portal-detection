@@ -1,14 +1,19 @@
 #!/bin/sh
 # Copyright (C) 2019 GL.iNet
 #
-# This is free software, licensed under the GNU General Public License v2.
+# This is free software, licensed under the GNU General Public License v3.
 # See /LICENSE for more information.
 #
 
+trap "clear_portal" INT TERM QUIT KILL
+[ -f /var/run/portal-detect.lock ] && exit 0
+
+. /lib/functions.sh
+
 ACTION=$1
-INTERFACE=$2
-DEVICE=$3
-GATEWAY=$4
+DEVICE=$2
+GATEWAY=$3
+INTERFACE=""
 DNS1=""
 DNS2=""
 
@@ -16,34 +21,70 @@ LAN_IP=""
 AUTH_IP=""
 REDICT_URL=""
 RESULT=0
-ENABLE="0"
+DEBUG=""
+INTERVAL=""
+TIMEOUT=""
+PROBE_IP=""
+JOIN_FLAG=0
 
-#captive.apple.com
-PROBE_IP="17.253.85.204"
+LOGGER()
+{
+	[ "$DEBUG" = "1" ] && logger $@
+}
 
-[ -f /var/run/portal-detect.lock ] && exit 0
+init_var()
+{
+	local testpoint debug timeout interval
+	config_get testpoint  global testpoint
+	config_get debug  global debug
+	config_get timeout  global timeout
+	config_get interval  global interval
+	PROBE_IP=${testpoint:-"17.253.85.204" "$testpoint"}
+	DEBUG=${debug:-"0" "$debug"}
+	INTERVAL=${interval:-"10" "$interval"}
+	TIMEOUT=${timeout:-"0" "$timeout"}
+	LOGGER -t portal-init "probe-ip:$PROBE_IP debug:$DEBUG interval:$INTERVAL timeout:$TIMEOUT"
+}
 
-[ -z "$INTERFACE" ] && {
-	INTERFACE="wwan"
+config_load portal-detect
+config_foreach init_var
+
+#To avoid long waits at exit time, we need to split the sleep
+split_sleep()
+{
+	local counter=$1
+	while [ true ];do
+		[ "$counter" -le 0 ] && break
+		sleep 1
+		let counter=counter-1
+	done	
 }
 
 [ -z "$DEVICE" ] && {
-	DEVICE=$(ifstatus wwan|jsonfilter -e  @.l3_device)
+	LOGGER portal-detect "Need a valid network device"
+	exit 0
+}
+
+INTERFACE=$(ubus call network.interface dump|jsonfilter -e "@.interface[@.l3_device='${DEVICE}'].interface")
+
+[ -z "$INTERFACE" ] && {
+	LOGGER portal-detect "Need a valid interface"
+	exit 0
 }
 
 [ -z "$GATEWAY" ] && {
-	GATEWAY=$(ifstatus wwan|jsonfilter -e  @.route[0].nexthop)
+	GATEWAY=$(ifstatus ${INTERFACE}|jsonfilter -e  @.route[0].nexthop)
 }
 
 [ -z "$DEVICE" -o -z "$GATEWAY" -o -z "$ACTION" ] && {
-	logger -t portal-prarm "$ACTION $DEVICE $GATEWAY"
+	LOGGER -t portal-prarm "$ACTION $DEVICE $GATEWAY"
 	exit 0
 }
 
 touch /var/run/portal-detect.lock
 
-DNS1=$(ifstatus wwan|jsonfilter -e '@["dns-server"][0]')
-DNS2=$(ifstatus wwan|jsonfilter -e '@["dns-server"][1]')
+DNS1=$(ifstatus ${INTERFACE}|jsonfilter -e '@["dns-server"][0]')
+DNS2=$(ifstatus ${INTERFACE}|jsonfilter -e '@["dns-server"][1]')
 [ -z "$DNS1" ] && {
 	DNS1="$GATEWAY"
 }
@@ -55,7 +96,7 @@ ipt_safe()
 {
 	$@
 	[ ! $? = 0  ] && {
-		logger "iptables command execute failed, try again!"
+		LOGGER "iptables command execute failed, try again!"
 		sleep 0.5
 		$@
 	}
@@ -66,8 +107,8 @@ ipt_safe()
 check_vpn_dns()
 {
 	local ov wg cf rb ss
-	ov=$(uci get glconfig.openvpn.ENABLE)
-	wg=$( uci get wireguard.@proxy[0].ENABLE)
+	ov=$(uci get glconfig.openvpn.enable)
+	wg=$( uci get wireguard.@proxy[0].enable)
 	cf=$(uci get glconfig.general.cloudflare_dns)
 	rb=$(uci get dhcp.@dnsmasq[0].rebind_protection)
 	ss=$(pidof ss-redir)
@@ -82,26 +123,20 @@ check_vpn_dns()
 probe_portal()
 {
 	local wan_status
-	logger -t portal-probe "probe"
-	ENABLE=$(uci get glconfig.repeater.portal 2>/dev/null)
-	[ ! "$ENABLE" = "1" ] && {
-		logger -t portal-probe "portal monitor not ENABLE"
-		RESULT=0
-		return 0;	
-	}
+	LOGGER -t portal-probe "probe"
 	check_vpn_dns
 	[ $? = 0 ] && {
-		logger -t portal-probe "not any VPN or DNS setings, just return"
+		LOGGER -t portal-probe "not any VPN or DNS setings, just return"
 		RESULT=0
 		return 0;
 	}
-	wan_status=$(cat /var/run/mwan3/iface_state/wan)
+	wan_status=$(cat /var/run/mwan3/iface_state/wan 2>/dev/null)
 	[ "$wan_status" = "online" ] && {
-		logger -t portal-probe "wan is online, just return"
+		LOGGER -t portal-probe "wan is online, just return"
 		RESULT=0
 		return 0	
 	}
-	tmp=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
+	tmp=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
 	[ $? = 0 ] || {
 		RESULT=0
 		return 0	
@@ -112,7 +147,7 @@ probe_portal()
 		return 0
 	}
 	REDICT_URL=$(echo $tmp|awk -F '/' '{print $3}')
-	logger -t portal-probe "httpcode:$http_code URL:$REDICT_URL"
+	LOGGER -t portal-probe "httpcode:$http_code URL:$REDICT_URL"
 	RESULT=2
 }
 
@@ -120,35 +155,29 @@ probe_portal()
 poll_portal()
 {
 	local wan_status
-	logger -t portal-probe "poll"
+	LOGGER -t portal-probe "poll"
 	while [ true ];do
-	ENABLE=$(uci get glconfig.repeater.portal 2>/dev/null)
-	[ ! "$ENABLE" = "1" ] && {
-		logger -t portal-poll "portal monitor not ENABLE"
-		remove_portal
-		break;
-	}
 	check_vpn_dns
 	[ $? = 0 ] && {
-		logger -t portal-poll "not any VPN or DNS setings, just return"
+		LOGGER -t portal-poll "not any VPN or DNS setings, just return"
 		remove_portal
 		break;
 	}	
-	wan_status=$(cat /var/run/mwan3/iface_state/wan)
+	wan_status=$(cat /var/run/mwan3/iface_state/wan 2>/dev/null)
 	[ "$wan_status" = "online" ] && {
-		logger -t portal-poll "wan online,stop portal poll"
+		LOGGER -t portal-poll "wan online,stop portal poll"
 		remove_portal
 		break
 	}	
-	http_code=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}" -o /dev/null)
+	http_code=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}" -o /dev/null)
 	[ $? = 0 ] || continue
 	[ "$http_code" = 302  ] || {
-		logger -t portal-poll "authenticated"
-		sleep 5
+		LOGGER -t portal-poll "authenticated"
+		split_sleep 5
 		remove_portal
 		break
 	}
-	sleep 2
+	split_sleep 2
 	done
 }
 
@@ -157,14 +186,15 @@ join_portal()
 	local rebind_ip="52.41.190.83"
 
 	#Use curl's DNS asynchronous resolution feature,which requires curl to support libcares
-	AUTH_IP=$(curl --connect-timeout 5 --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  ${PROBE_IP} -o /dev/null)
+	AUTH_IP=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  ${PROBE_IP} -o /dev/null)
 	[ -z "$AUTH_IP" ] && return
 
 	LAN_IP=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
 	[ -z "$LAN_IP" ] && {
-		logger -t portal-join "lan ip is null"
+		LOGGER -t portal-join "lan ip is null"
 		return
 	}
+	JOIN_FLAG=1
 
 	ipset create gl_portal_whitelist hash:net
 	#Add the required IP for authentication to the white list
@@ -206,7 +236,7 @@ join_portal()
 	while [ true ];do
 		[ ! -f /var/run/fw3.lock ] && break
 		sleep 1
-		logger -t portal-join "wait for firewall free"
+		LOGGER -t portal-join "wait for firewall free"
 	done
 	
 	#Allows forwarding data  that the IP address in the whitelist
@@ -242,14 +272,14 @@ join_portal()
 #Remove the rules
 remove_portal()
 {
-	logger -t portal-remove "remove"
+	LOGGER -t portal-remove "remove"
 	ip rule del fwmark 0x80/0x80 table 50
 	ip route flush table 50
 
 	while [ true ];do
 		[ ! -f /var/run/fw3.lock ] && break
 		sleep 1
-		logger -t portal-remove "wait for firewall free"
+		LOGGER -t portal-remove "wait for firewall free"
 	done
 	ipt_safe iptables -t mangle -D PREROUTING -j GL_PORTAL_DETECT
 	ipt_safe iptables -t mangle -F  GL_PORTAL_DETECT
@@ -270,15 +300,15 @@ remove_portal()
  	/etc/init.d/dnsmasq restart
 	
 	ipset destroy gl_portal_whitelist
+	JOIN_FLAG=0
 }
 
 clear_portal() {
-	remove_portal
+	[ $JOIN_FLAG = 1 ] && remove_portal
 	[ -f /var/run/portal-detect.lock ] && rm /var/run/portal-detect.lock
 	exit 0
 }
 
-trap "clear_portal" INT TERM QUIT KILL
 
 [ "$ACTION" = "join" ] && {
 	while [ true ];do
@@ -287,20 +317,8 @@ trap "clear_portal" INT TERM QUIT KILL
 			join_portal
 			poll_portal
 		}
-		sleep 10
+		split_sleep ${INTERVAL}
 	done
-}
-
-[ "$ACTION" = "remove" ] && {
-	remove_portal
-}
-
-[ "$ACTION" = "poll" ] && {
-	poll_portal
-}
-
-[ "$ACTION" = "probe" ] && {
-	probe_portal
 }
 
 [ -f /var/run/portal-detect.lock ] && rm /var/run/portal-detect.lock

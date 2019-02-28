@@ -1,0 +1,60 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2019 GL.iNet
+#
+# This is free software, licensed under the GNU General Public License v3.
+# See /LICENSE for more information.
+#
+
+START=99
+
+SERVICE_EN=""
+SERVICE_IF=""
+
+init_var()
+{
+	local enable ifname
+	config_get ifname  global ifname
+	config_get enable  global enable
+	SERVICE_EN=${enable:-"0" "$enable"}
+	SERVICE_IF=${ifname}
+}
+
+config_load portal-detect
+config_foreach init_var
+
+start()
+{
+	local status track
+	track=$(uci get ucitrack.@portal-detect[0].init 2>/dev/null)
+	[ -z "$track" ] && {
+		uci add ucitrack portal-detect
+		uci set ucitrack.@portal-detect[0]=portal-detect
+		uci set ucitrack.@portal-detect[0].init=portal-detect
+		uci commit ucitrack
+		/etc/init.d/ucitrack restart
+	}
+	[ "$SERVICE_EN" = "1" -a "$SERVICE_IF" != "" ] && {
+		INTERFACE=$(ubus call network.interface dump|jsonfilter -e "@.interface[@.l3_device='${SERVICE_IF}'].interface")
+		status=$(ifstatus  ${INTERFACE}|jsonfilter -e "@.up")
+		[ "$status" = "true" ] && {
+			env -i ACTION="ifup" DEVICE="${SERVICE_IF}" /sbin/hotplug-call iface
+		}
+	}
+}
+
+stop()
+{
+	for i in $(fuser /usr/bin/portal-detect);do
+		kill  $i
+	done
+	while [ true ];do
+		[ "$(fuser /usr/bin/portal-detect)" = ""  ] && break
+		sleep 1
+	done
+}
+
+restart()
+{
+	stop
+	start
+}
