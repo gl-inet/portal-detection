@@ -273,6 +273,7 @@ join_portal()
 remove_portal()
 {
 	LOGGER -t portal-remove "remove"
+	[ $JOIN_FLAG = 1 ] &&  return
 	ip rule del fwmark 0x80/0x80 table 50
 	ip route flush table 50
 
@@ -304,7 +305,7 @@ remove_portal()
 }
 
 clear_portal() {
-	[ $JOIN_FLAG = 1 ] && remove_portal
+	remove_portal
 	[ -f /var/run/portal-detect.lock ] && rm /var/run/portal-detect.lock
 	exit 0
 }
