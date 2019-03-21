@@ -136,19 +136,30 @@ probe_portal()
 		RESULT=0
 		return 0	
 	}
-	tmp=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}:%{redirect_url}" -o /dev/null)
+	tmp=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} \
+	-s -w "%{http_code}@@:@@%{redirect_url}" |grep -e http-equiv=\"refresh\" -e @@:@@ )
 	[ $? = 0 ] || {
-		RESULT=0
-		return 0	
-	}
-	http_code=$(echo $tmp|awk -F ':' '{print $1}')
-	[ "$http_code" = 302 ] || {
 		RESULT=0
 		return 0
 	}
-	REDICT_URL=$(echo $tmp|awk -F '/' '{print $3}')
-	LOGGER -t portal-probe "httpcode:$http_code URL:$REDICT_URL"
-	RESULT=2
+	http_code=$(echo $tmp|tail -n 1|awk -F '@@:@@' '{print $1}')
+	[ "$http_code" = 302 ] && {
+		REDICT_URL=$(echo $tmp|tail -n 1|awk -F '/' '{print $3}')
+		LOGGER -t portal-probe "httpcode:$http_code URL:$REDICT_URL"
+		RESULT=2
+		return 0
+	}
+
+	[ "$http_code" = 200 ] && {
+		REDICT_URL=$(echo $tmp|head -n 1|awk -F '/' '{print $3}')
+		LOGGER -t portal-probe "httpcode:$http_code URL:$REDICT_URL"
+		RESULT=1
+		[ -z "$REDICT_URL" ] && RESULT=0
+		return 0
+	}
+
+	RESULT=0
+	return 0
 }
 
 #Cycle check for authentication status
@@ -168,25 +179,43 @@ poll_portal()
 		LOGGER -t portal-poll "wan online,stop portal poll"
 		remove_portal
 		break
-	}	
-	http_code=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} -s -w "%{http_code}" -o /dev/null)
-	[ $? = 0 ] || continue
-	[ "$http_code" = 302  ] || {
-		LOGGER -t portal-poll "authenticated"
-		split_sleep 5
-		remove_portal
-		break
 	}
-	split_sleep 2
+
+	tmp=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE --dns-servers $DNS1  ${PROBE_IP} \
+	-s -w "%{http_code}@@:@@" |grep -e http-equiv=\"refresh\" -e @@:@@ )
+	[ $? = 0 ] || continue
+	http_code=$(echo $tmp|tail -n 1|awk -F '@@:@@' '{print $1}')
+	[ "$http_code" = 302 ] && {
+		split_sleep 2
+		continue
+	}
+
+	[ "$http_code" = 200 ] && {
+		REDICT_URL=$(echo $tmp|head -n 1|awk -F '/' '{print $3}')
+		[ -n "$REDICT_URL" ] && {
+			split_sleep 2
+			continue
+		}
+	}
+
+	LOGGER -t portal-poll "authenticated"
+	split_sleep 5
+	remove_portal
+	break
+
 	done
 }
 
 join_portal()
-{	
-	local rebind_ip="52.41.190.83"
+{
 
 	#Use curl's DNS asynchronous resolution feature,which requires curl to support libcares
-	AUTH_IP=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  ${PROBE_IP} -o /dev/null)
+	[ $RESULT = 2 ] && {
+		AUTH_IP=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  ${PROBE_IP} -o /dev/null)
+	}
+	[ $RESULT = 1 ] && {
+		AUTH_IP=$(curl --connect-timeout ${TIMEOUT} --interface $DEVICE --dns-interface $DEVICE  --dns-server $DNS1 -Ls -w "%{remote_ip}"  ${REDICT_URL} -o /dev/null)
+	}
 	[ -z "$AUTH_IP" ] && return
 
 	LAN_IP=$(ifstatus lan | jsonfilter -e '@["ipv4-address"][0].address')
@@ -199,23 +228,23 @@ join_portal()
 	ipset create gl_portal_whitelist hash:net
 	#Add the required IP for authentication to the white list
 	ipset add gl_portal_whitelist ${GATEWAY}/32
-	ipset add gl_portal_whitelist ${rebind_ip}/32
 	ipset add gl_portal_whitelist ${AUTH_IP}/32
+	ipset add gl_portal_whitelist ${PROBE_IP}/32
 	ipset add gl_portal_whitelist ${LAN_IP}/32
 	ipset add gl_portal_whitelist ${DNS1}/32
 	ipset add gl_portal_whitelist ${DNS2}/32
 	
 	echo "#temporary config" > /tmp/dnsmasq.d/portal-detect.conf
 	#To prevent data leaks, we need to hijack the URL locally
-	echo address=/.com/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
-	echo address=/.net/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
-	echo address=/.org/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
-	echo address=/.top/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
-	echo address=/.cn/${rebind_ip} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.com/${PROBE_IP} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.net/${PROBE_IP} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.org/${PROBE_IP} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.top/${PROBE_IP} >>/tmp/dnsmasq.d/portal-detect.conf
+	echo address=/.cn/${PROBE_IP} >>/tmp/dnsmasq.d/portal-detect.conf
 
 	#Add commonly used portal explorer urls to the white list
-	echo server=/$REDICT_URL/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
-	echo ipset=/$REDICT_URL/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
+	echo server=/${REDICT_URL}/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
+	echo ipset=/${REDICT_URL}/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	echo server=/apple.com/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
 	echo ipset=/apple.com/gl_portal_whitelist >>/tmp/dnsmasq.d/portal-detect.conf
 	echo server=/${PROBE_IP}/$DNS1 >>/tmp/dnsmasq.d/portal-detect.conf
@@ -273,7 +302,7 @@ join_portal()
 remove_portal()
 {
 	LOGGER -t portal-remove "remove"
-	[ $JOIN_FLAG = 1 ] &&  return
+	[ $JOIN_FLAG = 1 ] ||  return
 	ip rule del fwmark 0x80/0x80 table 50
 	ip route flush table 50
 
@@ -314,7 +343,7 @@ clear_portal() {
 [ "$ACTION" = "join" ] && {
 	while [ true ];do
 		probe_portal
-		[ $RESULT = 2 ] && {
+		[ $RESULT != 0 ] && {
 			join_portal
 			poll_portal
 		}
