@@ -8,7 +8,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gl-portal-detect
-PKG_VERSION:=3.0.12
+PKG_VERSION:=3.0.13
 PKG_RELEASE:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -17,7 +17,7 @@ define Package/gl-portal-detect
   SECTION:=base
   CATEGORY:=gl-inet
   TITLE+=Repeater automatically detect portal AP
-  DEPENDS+=dnsmasq-full libcurl libcares
+  DEPENDS:=+dnsmasq-full +libcurl +libcares
 endef
 
 define Build/Compile
